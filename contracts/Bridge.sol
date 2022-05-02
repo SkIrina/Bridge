@@ -66,6 +66,10 @@ contract Bridge {
         chainIdOther[chainId] = true;
     }
 
+    function setValidator(address validatorAddr) public onlyOwner {
+        validator = validatorAddr;
+    }
+
     function swap(uint chainIdTo, address tokenAddr, address to, uint amount, uint nonce) public {
         require(tokens[tokenAddr], 'Unsupported token');
         IERC20Burnable token = IERC20Burnable(tokenAddr);

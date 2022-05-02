@@ -61,6 +61,14 @@ describe("My awesome bridge contract", function () {
       expect(await bridge.chainIdOther(2)).to.equal(true);
     });
 
+    it("Should let owner set new validator", async function () {
+      // addr1 gets the item
+
+      await bridge.setValidator(addr2.address);
+
+      expect(await bridge.validator()).to.equal(addr2.address);
+    });
+
     it("Should not let non-owner add a token", async function () {
       // addr1 gets the item
 
