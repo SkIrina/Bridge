@@ -1,36 +1,111 @@
-//SPDX-License-Identifier: Unlicense
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./Token.sol";
+import "./IERC20Burnable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 contract Bridge {
-    Token public token;
-    address private owner;
-    address private validator = 0xAbF78864415e71466DBBB0Bef55ba98F22e468cA;
+    address public owner;
+    address public validator;
+    uint public chainIdDeployed;
+    mapping(uint => bool) public chainIdOther; 
+    mapping(address => bool) public tokens;
     mapping(bytes32 => bool) public processedTrans;
 
-    constructor() {
+    enum Type {
+        Burn,
+        Mint
+    }
+
+    struct Transaction {
+        address from;
+        address to;
+        uint chainId;
+        address tokenAddr;
+        uint256 amount;
+        uint256 nonce;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        Type transType;
+    }
+    
+    mapping(bytes32 => Transaction) public transactions;
+
+    event Transfer(
+        address from,
+        address to,
+        uint chainId,
+        address tokenAddr,
+        uint256 amount,
+        uint256 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s,
+        Type transType
+    );
+
+    constructor(address validatorAdd, uint chainIdTo, address tokenAddr) {
         owner = msg.sender;
-        token = new Token("MyERC20", "YEN", owner);
+        validator = validatorAdd;
+        chainIdDeployed = block.chainid;
+        chainIdOther[chainIdTo] = true;
+        tokens[tokenAddr] = true;
     }
 
-    event SwapInitialized(address from, address to, uint amount, uint nonce);
+    modifier onlyOwner {
+        require(msg.sender == owner, 'Not allowed');
+        _;
+    }
 
-    function swap(address to, uint amount, uint nonce) public {
+    function addToken(address tokenAddr) public onlyOwner {
+        tokens[tokenAddr] = true;
+    }
+
+    function addChain(uint chainId) public onlyOwner {
+        chainIdOther[chainId] = true;
+    }
+
+    function swap(uint chainIdTo, address tokenAddr, address to, uint amount, uint nonce) public {
+        require(tokens[tokenAddr], 'Unsupported token');
+        IERC20Burnable token = IERC20Burnable(tokenAddr);
+        require(chainIdOther[chainIdTo], 'Unsupported chain');
         token.burnFrom(msg.sender, amount);
-        emit SwapInitialized(msg.sender, to, amount, nonce);
+
+        bytes32 hashMsg = hashMessage(keccak256(
+                abi.encodePacked(msg.sender, to, chainIdTo, tokenAddr, amount, nonce)
+            ));
+        Transaction memory tr = Transaction(msg.sender, to, chainIdTo, tokenAddr, amount, nonce, 0, 0, 0, Type.Burn);
+        transactions[hashMsg] = tr;
+        emit Transfer(msg.sender, to, chainIdTo, tokenAddr, amount, nonce, 0, 0, 0, Type.Burn);
     }
 
-    function redeem(address addr, uint256 amount, uint256 nonce, uint8 v, bytes32 r, bytes32 s) public {
+    function redeem(
+        address addrFrom,
+        uint chainIdFrom,
+        address tokenAddr,
+        uint256 amount,
+        uint256 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+        ) public {
         bytes32 hashMsg = hashMessage(keccak256(
-                abi.encodePacked(addr, amount, nonce)
+                abi.encodePacked(addrFrom, msg.sender, chainIdFrom, tokenAddr, amount, nonce)
             ));
         require(!processedTrans[hashMsg], "Transaction already done");
+        require(chainIdOther[chainIdFrom], 'Unsupported chain');
+        require(tokens[tokenAddr], 'Unsupported token');
+        IERC20Burnable token = IERC20Burnable(tokenAddr);
+
         address addr1 = ecrecover(hashMsg, v, r, s);
         require(addr1 == validator, "Invalid signer");
         processedTrans[hashMsg] = true;
-        token.transferFrom(owner, addr, amount);
+        token.transferFrom(owner, msg.sender, amount);
+
+        Transaction memory tr = Transaction(addrFrom, msg.sender, chainIdFrom, tokenAddr, amount, nonce, v, r, s, Type.Mint);
+        transactions[hashMsg] = tr;
+        emit Transfer(addrFrom, msg.sender, chainIdFrom, tokenAddr, amount, nonce, v, r, s, Type.Mint);
     }
 
    function hashMessage(bytes32 message) private pure returns (bytes32) {
